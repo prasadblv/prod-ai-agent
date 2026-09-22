@@ -10,13 +10,24 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text()
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)-12s] %(levelname)-8s %(message)s",
     datefmt="%H:%M:%S",
 )
+logger = logging.getLogger(__name__)
+
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+}
+
+DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
+try:
+    DASHBOARD_HTML = DASHBOARD_PATH.read_text()
+except OSError:
+    logger.exception("Failed to read dashboard HTML from %s", DASHBOARD_PATH)
+    raise RuntimeError(f"Could not load dashboard template at {DASHBOARD_PATH}") from None
 
 
 @asynccontextmanager
@@ -35,7 +46,6 @@ app = FastAPI(
 
 class ChatBody(BaseModel):
     """Class representing chat body."""
-
     prompt: str = Field(min_length=1, max_length=8000)
     user_id: str = "User: "
     session_id: str = "Session: "
@@ -51,13 +61,7 @@ def health() -> dict[str, str]:
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> HTMLResponse:
-    return HTMLResponse(
-        DASHBOARD_HTML,
-        headers={
-            "Cache-Control": "no-store no-cache must-revalidate",
-            "Pragma": "no-cache",
-        },
-    )
+    return HTMLResponse(DASHBOARD_HTML, headers=NO_CACHE_HEADERS)
 
 
 # Dummy metrics endpoint for testing
@@ -66,8 +70,5 @@ def metrics() -> JSONResponse:
     """Return metrics in JSON format."""
     return JSONResponse(
         {"metrics": {"requests": 100, "errors": 5}},
-        headers={
-            "Cache-Control": "no-store no-cache must-revalidate",
-            "Pragma": "no-cache",
-        },
+        headers=NO_CACHE_HEADERS,
     )
