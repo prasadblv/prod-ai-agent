@@ -1,0 +1,76 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+      - "9464:9464"  # Prometheus scrape endpoint
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5}
+      - OTEL_SERVICE_NAME=prod-ai-agent
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel:4318
+      - OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://otel-collector:4318/v1/logs
+      - OTEL_EXPORTER_PROMETHEUS_ENABLED=true
+      - OTEL_EXPORTER_PROMETHEUS_PORT=9464
+    depends_on:
+      - otel
+      - otel-collector
+    restart: unless-stopped
+
+  otel:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4318:4318"    # OTLP/HTTP receiver
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"    # Prometheus UI
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4319:4318"    # OTLP/HTTP receiver (mapped to a different host port; the agent's 4318 already maps to the `otel` Jaeger service)
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.0
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"    # Kibana UI
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"    # Grafana UI
+    depends_on:
+      - prometheus
+    restart: unless-stopped

@@ -1,10 +1,14 @@
-"""OpenTelemetry setup: traces, metrics, and log correlation.
+"""OpenTelemetry setup: traces, metrics, and logs.
 
 Configured entirely via standard OTel env vars — see README.md for the list.
-With no OTEL_EXPORTER_OTLP_ENDPOINT set, spans/metrics print to the console
-so telemetry is visible with zero configuration; point
+With no OTEL_EXPORTER_OTLP_ENDPOINT set, spans/metrics/logs print to the
+console so telemetry is visible with zero configuration; point
 OTEL_EXPORTER_OTLP_ENDPOINT at a collector (e.g. Jaeger/otel-collector) to
-ship it out instead.
+ship it out instead. Every stdlib `logging` record (from any `logging.getLogger(...)`
+in the app) is forwarded through the OTel logs pipeline via a `LoggingHandler`
+attached to the root logger, in addition to whatever handler `app.py`'s
+`logging.basicConfig()` already set up for human-readable console output —
+expect each record to appear twice locally when console export is on.
 """
 
 from __future__ import annotations
@@ -12,11 +16,15 @@ from __future__ import annotations
 import logging
 import os
 
-from opentelemetry import metrics, trace
+from opentelemetry import _logs, metrics, trace
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
     ConsoleMetricExporter,
@@ -26,6 +34,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from prometheus_client import start_http_server
 
 log = logging.getLogger("otel")
 
@@ -92,21 +101,66 @@ def setup_telemetry() -> None:
     trace.set_tracer_provider(tracer_provider)
 
     # --- Metrics ---
+    # No fallback to the generic `endpoint` here (unlike traces/logs): in this
+    # deployment it points at Jaeger, which only implements an OTLP *traces*
+    # receiver, so periodic metrics exports there 404 every cycle. Metrics are
+    # already fully covered by the Prometheus scrape endpoint below, so OTLP
+    # metrics export is opt-in only, via the OTel-spec per-signal endpoint
+    # (a real metrics-capable OTLP receiver, e.g. an otel-collector).
     readers = []
-    if endpoint:
+    metrics_endpoint = os.getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+    if metrics_endpoint:
         readers.append(
             PeriodicExportingMetricReader(
-                OTLPMetricExporter(endpoint=f"{endpoint.rstrip('/')}/v1/metrics", headers=headers)
+                OTLPMetricExporter(endpoint=metrics_endpoint, headers=headers)
             )
         )
     if use_console:
         readers.append(
             PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=30_000)
         )
+
+    prometheus_enabled = _bool_env("OTEL_EXPORTER_PROMETHEUS_ENABLED", True)
+    if prometheus_enabled:
+        readers.append(PrometheusMetricReader())
+        prometheus_host = os.getenv("OTEL_EXPORTER_PROMETHEUS_HOST", "0.0.0.0")
+        prometheus_port = int(os.getenv("OTEL_EXPORTER_PROMETHEUS_PORT", "9464"))
+        start_http_server(port=prometheus_port, addr=prometheus_host)
+        log.info(f"Prometheus metrics exposed at http://{prometheus_host}:{prometheus_port}/metrics")
+
     meter_provider = MeterProvider(resource=resource, metric_readers=readers)
     metrics.set_meter_provider(meter_provider)
 
-    # --- Log correlation: injects otelTraceID/otelSpanID into log records ---
+    # --- Logs: forward every stdlib `logging` record through OTel too ---
+    # OTEL_EXPORTER_OTLP_LOGS_ENDPOINT (the OTel-spec per-signal override) lets
+    # logs go to a different collector than traces/metrics — e.g. an
+    # otel-collector fronting Elasticsearch — without disturbing the generic
+    # OTEL_EXPORTER_OTLP_ENDPOINT other signals still use. Per spec, the
+    # per-signal var is a full URL used as-is (no `/v1/logs` appended); the
+    # generic one gets the path appended, same as traces/metrics above.
+    logs_endpoint_override = os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+    if logs_endpoint_override:
+        logs_url = logs_endpoint_override
+    elif endpoint:
+        logs_url = f"{endpoint.rstrip('/')}/v1/logs"
+    else:
+        logs_url = None
+
+    logger_provider = LoggerProvider(resource=resource)
+    if logs_url:
+        logger_provider.add_log_record_processor(
+            BatchLogRecordProcessor(OTLPLogExporter(endpoint=logs_url, headers=headers))
+        )
+    if use_console:
+        logger_provider.add_log_record_processor(BatchLogRecordProcessor(ConsoleLogExporter()))
+    _logs.set_logger_provider(logger_provider)
+
+    # --- Log correlation + export: injects otelTraceID/otelSpanID into log
+    # records, and — since a LoggerProvider is now registered above —
+    # LoggingInstrumentor also auto-attaches a LoggingHandler to the root
+    # logger that forwards every record through the logs pipeline set up
+    # above. Don't additionally call `logging.getLogger().addHandler(...)`
+    # here; that would double-export every record.
     LoggingInstrumentor().instrument(set_logging_format=False)
 
     # --- Outbound HTTP (covers the Anthropic SDK, which is httpx-based) ---
@@ -119,13 +173,16 @@ def setup_telemetry() -> None:
 
 
 def shutdown_telemetry() -> None:
-    """Flush and shut down the tracer/meter providers."""
+    """Flush and shut down the tracer/meter/logger providers."""
     tp = trace.get_tracer_provider()
     if hasattr(tp, "shutdown"):
         tp.shutdown()
     mp = metrics.get_meter_provider()
     if hasattr(mp, "shutdown"):
         mp.shutdown()
+    lp = _logs.get_logger_provider()
+    if hasattr(lp, "shutdown"):
+        lp.shutdown()
 
 
 def instrument_fastapi_app(app) -> None:

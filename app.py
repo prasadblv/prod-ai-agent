@@ -13,7 +13,11 @@ from pydantic import BaseModel, Field
 
 from agent.agent import Agent
 from agent.metrics.metrics import METRICS
-from agent.observability.telemetry import instrument_fastapi_app, setup_telemetry, shutdown_telemetry
+from agent.observability.telemetry import (
+    instrument_fastapi_app,
+    setup_telemetry,
+    shutdown_telemetry,
+)
 from agent.types.types import SecurityContext
 
 logging.basicConfig(

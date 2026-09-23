@@ -1,0 +1,24 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+    # No explicit logs_index: let the exporter write to its default
+    # `logs-generic.otel-default` data stream, which Elasticsearch 8.x
+    # auto-creates via its built-in `logs-*-*` index template. A custom
+    # `logs_index` name is a plain index, which ES does NOT auto-create on
+    # first write — that mismatch caused index_not_found_exception here.
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [elasticsearch]
