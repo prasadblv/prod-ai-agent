@@ -3,7 +3,7 @@ import uuid
 from enum import Enum
 from typing import Any
 
-from pydantic.v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 
 
 class AgentRole(str,Enum):
@@ -33,7 +33,7 @@ class AgentResponse(BaseModel):
     """Class representing the agent response."""
     request_id: str
     content: str
-    tool_calls: list[dict] = Field(default_factory=dict)
+    tool_calls: list[dict] = Field(default_factory=list)
     tokens_used: int = 0
     cost_usd: float = 0.0
     latency_ms: int = 0

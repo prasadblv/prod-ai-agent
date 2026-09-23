@@ -20,6 +20,6 @@ class InMemoryStore:
         turns.append({"role":"user", "content":user_msg})
         turns.append({"role":"assistant", "content":assistant_msg})
         if len(turns) > self.max_turns * 2:
-            turns[:] = turns[-(self.max_turns*2)]
+            turns[:] = turns[-(self.max_turns*2):]
         log.info(f"Memory.store — session={session_id} total_turns={len(turns)//2}")    
 

@@ -28,8 +28,9 @@ Run the CLI demo (no HTTP server) instead of the API:
 Tests:
 ```bash
 ./.venv/bin/python3 -m pytest
+./.venv/bin/python3 -m pytest tests/test_agent_metrics.py -k test_records_ok_in_metrics  # single test
 ```
-`tests/test_agent_metrics.py` currently has no test cases — there's no working example to model a new test on yet.
+No pytest config file exists — defaults apply (`tests/` dir, `test_*.py` files). `tests/conftest.py` has shared fixtures (`security_context`, `fresh_metric_store`); `Agent`/`LLM` are tested with mocked dependencies (`Agent.llm` mocked directly, `anthropic.Anthropic` patched) rather than hitting the network — there's no live-API test mode.
 
 ## Environment variables
 
@@ -50,6 +51,6 @@ Tests:
 
 **Observability (`agent/observability/telemetry.py`):** `tracer`/`meter` and the metric instruments (`request_counter`, `token_counter`, `cost_counter`, `latency_histogram`) are created at import time as OTel proxy objects — safe to import in `agent.py`/`llm.py` before `setup_telemetry()` has actually run. `setup_telemetry()` itself is called once, from `app.py`'s FastAPI `lifespan` (HTTP mode) or from `main.py::main()` (CLI mode); it's idempotent (`_initialized` guard). FastAPI instrumentation (`instrument_fastapi_app`) is applied at module import time in `app.py`, outside the lifespan.
 
-**Types (`agent/types/types.py`):** uses `pydantic.v1` compat imports (`from pydantic.v1 import BaseModel`) even though `pydantic` 2.x is installed — don't "fix" this to plain `pydantic` imports without checking why, it changes validation behavior.
+**Types (`agent/types/types.py`):** native `pydantic` v2 `BaseModel`s (`AgentRole`, `SecurityContext`, `AgentRequest`, `AgentResponse`). No `Config`/`model_config` is set on any of them, so they're mutable after construction — `Agent.run` relies on this, setting `response.layer_timings` and `response.status` post-hoc after `LLM.call()` returns. `app.py`'s `ChatBody` is a separate, unrelated `pydantic` model used only for the FastAPI request body; none of the 4 types above are ever used as a FastAPI request/response model directly.
 
 **`dashboard.html`** is a single static file with inline CSS/JS (no build step) — `app.py` reads it once at import time from disk (`DASHBOARD_PATH.read_text()`) and serves the cached string; a change to the file requires restarting the server to take effect. It polls `GET /metrics` every second and posts to `POST /demo` to trigger a canned request.

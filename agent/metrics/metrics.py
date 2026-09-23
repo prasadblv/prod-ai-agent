@@ -50,7 +50,7 @@ class MetricStore:
             elif status == "rejected":
                 self._data["requests_rejected"] += 1
             self._data["tokens_total"] += tokens
-            self._data["cost_usd_total"] += round(
+            self._data["cost_usd_total"] = round(
                 self._data["cost_usd_total"] + max(0.0, cost_usd), 6
             )
             self._data["latency_ms_total"] += max(0, latency_ms)
