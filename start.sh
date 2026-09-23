@@ -48,7 +48,7 @@ fi
 #    --name "$CONTAINER_NAME" \
 #    -p "${PORT}:8080" \
 #    -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
-#    -e ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-4-5-sonnet}" \
+#    -e ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5}" \
 #    "$IMAGE_NAME"
 
 #  echo "Started $CONTAINER_NAME"
