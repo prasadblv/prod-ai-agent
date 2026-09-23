@@ -121,7 +121,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .pane-head span { color: var(--muted); font-size: 0.8rem; }
 .grid {
   display: grid; gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 .metric {
   position: relative; overflow: hidden;
@@ -206,7 +206,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 </div>
 <script>
 function fmt(n){ return (typeof n === 'number') ? n : 0; }
-function money(n){ return '$' + (Number(n||0)).toFixed(6); }
+function money(n){ return '$' + (Number(n||0)).toFixed(12); }
 function render(d){
   document.getElementById('metrics').innerHTML =
     '<div class="metric"><div class="label">Requests total</div><div class="value">'+fmt(d.requests_total)+'</div></div>'+

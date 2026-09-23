@@ -1,8 +1,11 @@
 import logging
 import os
 import time
-import anthropic
 
+import anthropic
+from opentelemetry.trace import Status, StatusCode
+
+from agent.observability.telemetry import tracer
 from agent.types.types import AgentRequest, AgentResponse
 
 log = logging.getLogger("llm")
@@ -45,52 +48,75 @@ class LLM:
     def call(self, req: AgentRequest, msg: list[dict]) -> AgentResponse:
         t0 = time.perf_counter()
         log.info(f"Calling LLM -> request id : {req.security_context.request_id}")
-        if self._use_real_llm:
-            try:
-                res = self._client.messages.create(
-                    model=self._model,
-                    system=SYSTEM_PROMPT,
-                    messages=msg,
-                    max_tokens=req.max_token,
-                    temperature=req.temperature,
-                )
-                content = "".join(
-                    block.text for block in res.content if block.type == "text"
-                )
-                tokens_in = res.usage.input_tokens
-                tokens_out = res.usage.output_tokens
-                cost = _estimate_cost(tokens_in, tokens_out)
-
-            except anthropic.APIConnectionError as e:
-                log.error("LLM server could not be reached!")
-                log.error(e.__cause__)
-            except anthropic.RateLimitError:
-                log.error("A 429 status code was received; we should back off a bit.")
-            except anthropic.APIStatusError as e:
-                log.error("Another non-200-range status code was received")
-                log.error(e.status_code)
-                log.error(e.response)
-
-        else:
-            last_user = next(
-                (m["content"] for m in reversed(msg) if m["role"] == "user"), ""
+        model = self._model if self._use_real_llm else "stub"
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attributes(
+                {
+                    "gen_ai.system": "anthropic",
+                    "gen_ai.request.model": model,
+                }
             )
-            content = f"[STUB] Secure response to: '{last_user[:60]}...'"
-            tokens_in, tokens_out = 42, 18
-            cost = _estimate_cost(tokens_in, tokens_out)
-            time.sleep(0.005)
+            if self._use_real_llm:
+                try:
+                    res = self._client.messages.create(
+                        model=self._model,
+                        system=SYSTEM_PROMPT,
+                        messages=msg,
+                        max_tokens=req.max_token,
+                    )
+                    content = "".join(
+                        block.text for block in res.content if block.type == "text"
+                    )
+                    tokens_in = res.usage.input_tokens
+                    tokens_out = res.usage.output_tokens
+                    cost = _estimate_cost(tokens_in, tokens_out)
+                except anthropic.APIConnectionError as e:
+                    log.error("LLM server could not be reached!")
+                    log.error(e.__cause__)
+                    span.record_exception(e)
+                    span.set_status(Status(StatusCode.ERROR, "LLM connection error"))
+                    raise
+                except anthropic.RateLimitError as e:
+                    log.error("A 429 status code was received; we should back off a bit.")
+                    span.record_exception(e)
+                    span.set_status(Status(StatusCode.ERROR, "LLM rate limited"))
+                    raise
+                except anthropic.APIStatusError as e:
+                    log.error("Another non-200-range status code was received")
+                    log.error(e.status_code)
+                    log.error(e.response)
+                    span.record_exception(e)
+                    span.set_status(Status(StatusCode.ERROR, f"LLM status error {e.status_code}"))
+                    raise
 
-        latency_ms = max(1, int((time.perf_counter() - t0) * 1000))
-        log.info(
-            f"LLM.call.complete —> latency={latency_ms}ms "
-            f"tokens={tokens_in + tokens_out} cost=${cost:.6f}"
-        )
+            else:
+                last_user = next(
+                    (m["content"] for m in reversed(msg) if m["role"] == "user"), ""
+                )
+                content = f"[STUB] Secure response to: '{last_user[:60]}...'"
+                tokens_in, tokens_out = 42, 18
+                cost = _estimate_cost(tokens_in, tokens_out)
+                time.sleep(0.005)
 
-        return AgentResponse(
-            request_id=req.security_ctx.request_id,
-            content=content,
-            tokens_used=tokens_in + tokens_out,
-            cost_usd=cost,
-            latency_ms=latency_ms,
-            status="ok",
-        )
+            latency_ms = max(1, int((time.perf_counter() - t0) * 1000))
+            span.set_attributes(
+                {
+                    "gen_ai.usage.input_tokens": tokens_in,
+                    "gen_ai.usage.output_tokens": tokens_out,
+                    "llm.cost_usd": cost,
+                    "llm.latency_ms": latency_ms,
+                }
+            )
+            log.info(
+                f"LLM.call.complete —> latency={latency_ms}ms "
+                f"tokens={tokens_in + tokens_out} cost=${cost:.6f}"
+            )
+
+            return AgentResponse(
+                request_id=req.security_context.request_id,
+                content=content,
+                tokens_used=tokens_in + tokens_out,
+                cost_usd=cost,
+                latency_ms=latency_ms,
+                status="ok",
+            )

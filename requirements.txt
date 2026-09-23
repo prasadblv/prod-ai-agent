@@ -6,3 +6,11 @@ python-dotenv==1.2.3
 anthropic==1.8.0
 pytest==9.1.1
 httpx==0.28.1
+
+# Observability (OpenTelemetry)
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-httpx==0.65b0
+opentelemetry-instrumentation-logging==0.65b0

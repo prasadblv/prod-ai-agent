@@ -34,7 +34,7 @@ class AgentResponse(BaseModel):
     request_id: str
     content: str
     tool_calls: list[dict] = Field(default_factory=dict)
-    token_used: int = 0
+    tokens_used: int = 0
     cost_usd: float = 0.0
     latency_ms: int = 0
     layer_timings: dict[str,Any] = Field(default_factory=dict)
